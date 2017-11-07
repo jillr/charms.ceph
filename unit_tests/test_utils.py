@@ -506,6 +506,48 @@ class CephTestCase(unittest.TestCase):
         with self.assertRaises(Exception):
             utils.osd_noout(True)
 
+    @patch.object(utils.subprocess, 'check_output')
+    def test_set_osd_out(self, mock_check_output):
+        utils.set_osd_out('99')
+        mock_check_output.assert_has_calls([
+            call(['ceph', 'osd', 'out', 'osd.99'])])
+
+    @patch.object(utils.subprocess, 'check_output')
+    def test_delete_osd(self, mock_check_output):
+        utils.delete_osd('99')
+        mock_check_output.assert_has_calls([
+            call(['ceph', 'osd', 'out', 'osd.99']),
+            call(['ceph', 'osd', 'crush', 'remove', 'osd.99']),
+            call(['ceph', 'auth', 'del', 'osd.99']),
+            call(['ceph', 'osd', 'rm', 'osd.99'])
+        ])
+
+    @patch.object(utils.subprocess, 'check_output')
+    @patch.object(utils, 'mounts')
+    @patch.object(utils, 'umount')
+    @patch.object(utils.shutil, 'rmtree')
+    @patch.object(utils, 'systemd')
+    @patch.object(utils, 'service_stop')
+    def test_decommission_osd(self, mock_service_stop,
+                              mock_systemd,
+                              mock_rmtree,
+                              mock_umount,
+                              mock_mounts,
+                              mock_check_output):
+        mock_mounts.return_value = [['/sys', 'sysfs'],
+                                    ['/proc', 'proc'],
+                                    ['/dev', 'udev'],
+                                    ['/dev/pts', 'devpts'],
+                                    ['/run', 'tmpfs'],
+                                    ['/', '/dev/sda1'],
+                                    ['/srv/node/ceph99', '/dev/sdb']]
+        mock_umount.return_value = 0
+        mock_systemd.return_value = True
+        mock_service_stop.return_value = True
+        utils.decommission_osd('/dev/sdb', '99')
+        mock_umount.assert_called_with('/srv/node/ceph99')
+        mock_rmtree.assert_called_with('/srv/node/ceph99')
+
 
 class CephVersionTestCase(unittest.TestCase):
     @patch.object(utils, 'get_os_codename_install_source')

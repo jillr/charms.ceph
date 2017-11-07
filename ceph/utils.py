@@ -851,84 +851,63 @@ def umount(mount_point):
     return 0
 
 
-def replace_osd(dead_osd_number,
-                dead_osd_device,
-                new_osd_device,
-                osd_format,
-                osd_journal,
-                reformat_osd=False,
-                ignore_errors=False):
-    """This function will automate the replacement of a failed osd disk as much
-    as possible. It will revoke the keys for the old osd, remove it from the
-    crush map and then add a new osd into the cluster.
+def set_osd_out(osd_number):
+    """
+    Drop this osd out of the cluster. This will begin a rebalance operation.
+    :param osd_number: The osd number found in ceph osd tree. Example: 99
+    """
+    try:
+        status_set('maintenance', 'Removing osd {}'.format(osd_number))
+        subprocess.check_output([
+            'ceph', 'osd', 'out', 'osd.{}'.format(osd_number)])
+    except subprocess.CalledProcessError as e:
+        log('Setting osd.{} out failed with error: ' + e.output).format(
+            osd_number)
 
-    :param dead_osd_number: The osd number found in ceph osd tree. Example: 99
-    :param dead_osd_device: The physical device. Example: /dev/sda
-    :param osd_format:
-    :param osd_journal:
-    :param reformat_osd:
-    :param ignore_errors:
+
+def delete_osd(osd_number):
+    """
+    Revoke the keys for the old osd, remove it from the crush map
+    :param osd_number: The osd number found in ceph osd tree. Example: 99
+    """
+    set_osd_out(osd_number)
+    try:
+        subprocess.check_output([
+            'ceph', 'osd', 'crush', 'remove', 'osd.{}'.format(osd_number)])
+        subprocess.check_output([
+            'ceph', 'auth', 'del', 'osd.{}'.format(osd_number)])
+        subprocess.check_output([
+            'ceph', 'osd', 'rm', 'osd.{}'.format(osd_number)])
+
+    except subprocess.CalledProcessError as e:
+        log('Removing osd.{} failed with error: ' + e.output).format(
+            osd_number)
+
+
+def decommission_osd(osd_device, osd_number):
+    """
+    Unmount and remove an OSD device from a storage node.
+    :param osd_device: The physical device. Example: /dev/sda
+    :param osd_number: The osd number found in ceph osd tree. Example: 99
     """
     host_mounts = mounts()
     mount_point = None
     for mount in host_mounts:
-        if mount[1] == dead_osd_device:
+        if mount[1] == osd_device:
             mount_point = mount[0]
-    # need to convert dev to osd number
-    # also need to get the mounted drive so we can tell the admin to
-    # replace it
-    try:
-        # Drop this osd out of the cluster. This will begin a
-        # rebalance operation
-        status_set('maintenance', 'Removing osd {}'.format(dead_osd_number))
-        subprocess.check_output([
-            'ceph',
-            '--id',
-            'osd-upgrade',
-            'osd', 'out',
-            'osd.{}'.format(dead_osd_number)])
-
-        # Kill the osd process if it's not already dead
-        if systemd():
-            service_stop('ceph-osd@{}'.format(dead_osd_number))
-        else:
-            subprocess.check_output(['stop', 'ceph-osd', 'id={}'.format(
-                dead_osd_number)])
-        # umount if still mounted
-        ret = umount(mount_point)
-        if ret < 0:
-            raise RuntimeError('umount {} failed with error: {}'.format(
-                mount_point, os.strerror(ret)))
-        # Clean up the old mount point
-        shutil.rmtree(mount_point)
-        subprocess.check_output([
-            'ceph',
-            '--id',
-            'osd-upgrade',
-            'osd', 'crush', 'remove',
-            'osd.{}'.format(dead_osd_number)])
-        # Revoke the OSDs access keys
-        subprocess.check_output([
-            'ceph',
-            '--id',
-            'osd-upgrade',
-            'auth', 'del',
-            'osd.{}'.format(dead_osd_number)])
-        subprocess.check_output([
-            'ceph',
-            '--id',
-            'osd-upgrade',
-            'osd', 'rm',
-            'osd.{}'.format(dead_osd_number)])
-        status_set('maintenance', 'Setting up replacement osd {}'.format(
-            new_osd_device))
-        osdize(new_osd_device,
-               osd_format,
-               osd_journal,
-               reformat_osd,
-               ignore_errors)
-    except subprocess.CalledProcessError as e:
-        log('replace_osd failed with error: ' + e.output)
+    # Stop the osd process if it's not already dead
+    if systemd():
+        service_stop('ceph-osd@{}'.format(osd_number))
+    else:
+        subprocess.check_output(['stop', 'ceph-osd', 'id={}'.format(
+            osd_number)])
+    # umount if still mounted
+    ret = umount(mount_point)
+    if ret < 0:
+        raise RuntimeError('umount {} failed with error: {}'.format(
+            mount_point, os.strerror(ret)))
+    # Clean up the old mount point
+    shutil.rmtree(mount_point)
 
 
 def get_partition_list(dev):
